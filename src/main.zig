@@ -1,24 +1,28 @@
 const std = @import("std");
+const net = std.net;
 
 pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    // Connect to localhost:8080
+    const address = try net.Address.parseIp4("127.0.0.1", 8080);
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+    const stdout = std.io.getStdOut().writer();
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+    var stream = net.tcpConnectToAddress(address) catch |err| {
+        try stdout.print("Error: Could not connect to server at {}\n", .{address});
+        try stdout.print("Make sure a server is running on port 8080\n", .{});
+        return err;
+    };
+    defer stream.close();
 
-    try bw.flush(); // don't forget to flush!
-}
+    try stdout.print("Connected to server at {}\n", .{address});
 
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
+    // Send "Hello World"
+    try stream.writeAll("Hello World");
+
+    // Read response
+    var buffer: [1024]u8 = undefined;
+    const bytes_read = try stream.read(&buffer);
+
+    // Print response
+    try stdout.print("Server response: {s}\n", .{buffer[0..bytes_read]});
 }
