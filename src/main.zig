@@ -4,8 +4,7 @@ const net = std.net;
 const utils = @import("utils.zig");
 const NetconfTCP = @import("netconf_tcp.zig").NetconfTCP;
 const expect = std.testing.expect;
-const ChildProcess = std.process.Child;
-const Allocator = std.mem.Allocator;
+
 
 extern fn getuid() callconv(.C) u32;
 extern fn getgid() callconv(.C) u32;
@@ -28,15 +27,15 @@ const hello_1_1: []const u8 =
     \\</hello>
 ;
 
-
-
 const Proto = enum { tcp, ssh };
 
 pub fn main() u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
     defer _ = gpa.deinit();
     var debug = false;
     var vsn_1_0 = false;
+    var hello: bool = false;
     var username: []const u8 = "admin";
     var password: []const u8 = "admin";
     var host: []const u8 = "localhost";
@@ -49,13 +48,15 @@ pub fn main() u8 {
         \\-h, --help                 Display this help and exit.
         \\-d, --debug                Enable debug output
         \\--netconf10                Use Netconf vsn 1.0 (default: 1.1)
+        \\--hello                    Only send a NETCONF Hello message
         \\-u, --user  <STR>          Username (default: admin)
         \\-p, --password <STR>       Password (default: admin)
         \\--proto <PROTO>            Protocol (default: tcp)
         \\--host <STR>               Host (default: localhost)
         \\--port <INT>               Port (default: 2022)
         \\--groups <STR>             Groups, comma separated
-        \\--sup_gids <STR>           Suplementary groups, comma separated
+        \\--sup-gids <STR>           Suplementary groups, comma separated
+        \\<FILE>                     Input file (optional, reads from stdin if not provided)
         \\
     );
 
@@ -63,6 +64,7 @@ pub fn main() u8 {
     // types.
     const parsers = comptime .{
         .STR = clap.parsers.string,
+        .FILE = clap.parsers.string,
         .INT = clap.parsers.int(u16, 10),
         .PROTO = clap.parsers.enumeration(Proto),
     };
@@ -70,7 +72,7 @@ pub fn main() u8 {
     var diag = clap.Diagnostic{};
     var res = clap.parse(clap.Help, &params, parsers, .{
         .diagnostic = &diag,
-        .allocator = gpa.allocator(),
+        .allocator = allocator,
     }) catch |err| {
         // Report useful error and exit.
         diag.report(std.io.getStdErr().writer(), err) catch {};
@@ -79,11 +81,12 @@ pub fn main() u8 {
     defer res.deinit();
 
     if (res.args.help != 0) {
-        std.debug.print("Usage: zig build run -- [options]\n", .{});
+        std.debug.print("Usage: zig build run -- [options] [file]\n", .{});
         std.debug.print("Options:\n", .{});
         std.debug.print("  -h, --help             Display this help and exit\n", .{});
         std.debug.print("  -d, --debug            Enable debug output\n", .{});
         std.debug.print("  --netconf10            Use Netconf vsn 1.0 (default: 1.1)\n", .{});
+        std.debug.print("  --hello                Only send a NETCONF Hello message\n", .{});
         std.debug.print("  -u, --user <username>  Username to use (default: admin)\n", .{});
         std.debug.print("  --password <password>  Password to use (default: admin)\n", .{});
         std.debug.print("  --host <host>          Host to connect to (default: localhost)\n", .{});
@@ -91,15 +94,16 @@ pub fn main() u8 {
         std.debug.print("  --proto <proto>        Protocol to use (default: tcp)\n", .{});
         std.debug.print("  --groups <groups>      Comma separated list of groups (default: )\n", .{});
         std.debug.print("  --sup-gids <groups>    Comma separated list of supplementary groups (default: )\n", .{});
+        std.debug.print("\nIf no file is specified, reads from stdin\n", .{});
         return 0;
     }
 
     if (res.args.debug != 0)
         debug = true;
-
     if (res.args.netconf10 != 0)
         vsn_1_0 = true;
-
+    if (res.args.hello != 0)
+        hello = true;
     if (res.args.user != null)
         username = res.args.user.?;
     if (res.args.password != null)
@@ -112,20 +116,20 @@ pub fn main() u8 {
         proto = res.args.proto.?;
     if (res.args.groups != null)
         groups = res.args.groups.?;
-    if (res.args.sup_gids != null)
-        sup_gids = res.args.sup_gids.?;
-
-    const stdout = std.io.getStdOut().writer();
+    // The @ syntax (below) allows you to access fields
+    // whose names are not regular identifiers.
+    if (res.args.@"sup-gids" != null)
+        sup_gids = res.args.@"sup-gids".?;
 
     // Get current user info
     const uid = getuid();
     const gid = getgid();
-    const homedir = std.process.getEnvVarOwned(gpa.allocator(), "HOME") catch "/tmp";
-    defer gpa.allocator().free(homedir);
+    const homedir = std.process.getEnvVarOwned(allocator, "HOME") catch "/tmp";
+    defer allocator.free(homedir);
 
     // Initialize TCP connection handler
     var tcp_conn = NetconfTCP.init(
-        gpa.allocator(),
+        allocator,
         username,
         uid,
         gid,
@@ -155,44 +159,48 @@ pub fn main() u8 {
         return 1;
     };
 
-    // Pretty print XML response
-    const xml_response = buffer[0..bytes_read];
-
-    var process = ChildProcess.init(&.{ "xmllint", "--format", "-" }, gpa.allocator());
-    process.stdin_behavior = .Pipe;
-    process.stdout_behavior = .Pipe;
-
-    process.spawn() catch |err| {
-        std.debug.print("Spawn process failed: {any}\n", .{err});
-        return 1;
-    };
-
-    if (process.stdin) |stdin| {
-        stdin.writeAll(xml_response) catch |err| {
-            std.debug.print("Write to stdin failed: {any}\n", .{err});
+    if (hello) {
+        if (!utils.prettyPrint(allocator, buffer[0..bytes_read])) {
+            std.debug.print("Failed to pretty print XML\n", .{});
             return 1;
-        };
-        stdin.close();
-        process.stdin = null;
+        }
+        return 0;
     }
 
-    const formatted_xml = process.stdout.?.reader().readAllAlloc(gpa.allocator(), 1024 * 1024) catch |err| {
-        std.debug.print("Read from stdout failed: {any}\n", .{err});
-        return 1;
-    };
-    defer gpa.allocator().free(formatted_xml);
+    // Set up the reader based on whether a file was provided
+    var file: ?std.fs.File = null;
+    defer if (file) |f| f.close();
 
-    _ = process.wait() catch |err| {
-        std.debug.print("Wait for process failed: {any}\n", .{err});
-        return 1;
-    };
+    var reader: std.fs.File.Reader = undefined;
+    if (res.positionals.len > 0) {
+        // Read from file
+        file = std.fs.cwd().openFile(res.positionals[0], .{}) catch |err| {
+            std.debug.print("Failed to open file '{s}': {any}\n", .{ res.positionals[0], err });
+            return 1;
+        };
+        reader = file.?.reader();
+    } else {
+        // Read from stdin
+        reader = std.io.getStdIn().reader();
+    }
 
-    stdout.print("\n{s}\n", .{formatted_xml}) catch |err| {
-        std.debug.print("Print to stdout failed: {any}\n", .{err});
-        return 1;
-    };
+    var inbuf: [1024*1024]u8 = undefined;
+    while (true) {
+        const maybe_line = reader.readUntilDelimiterOrEof(&inbuf, '\n') catch |err| {
+            std.debug.print("Read failed: {any}\n", .{err});
+            return 1;
+        };
+
+        if (maybe_line) |line| {
+            tcp_conn.write(line) catch |err| {
+                std.debug.print("Write to TCP failed: {any}\n", .{err});
+                break;
+            };
+        } else {
+            // EOF reached
+            break;
+        }
+    }
 
     return 0;
-
 }
-

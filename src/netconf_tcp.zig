@@ -82,6 +82,10 @@ pub const NetconfTCP = struct {
         try self.stream.writeAll(hello_msg);
     }
 
+    pub fn write(self: *NetconfTCP, buffer: []const u8) !void {
+        try self.stream.writeAll(buffer);
+    }
+
     pub fn readResponse(self: *NetconfTCP, buffer: []u8) !usize {
         return try self.stream.read(buffer);
     }
