@@ -15,6 +15,12 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    // Get the clap dependency
+    const clap_dep = b.dependency("clap", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const lib = b.addStaticLibrary(.{
         .name = "zig-tcp",
         // In this case the main source file is merely a path, however, in more
@@ -35,6 +41,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    // Add clap as a module to the executable
+    exe.root_module.addImport("clap", clap_dep.module("clap"));
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
@@ -79,6 +88,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    // Add clap as a module to the test executable
+    exe_unit_tests.root_module.addImport("clap", clap_dep.module("clap"));
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
