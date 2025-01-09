@@ -1,8 +1,13 @@
 const std = @import("std");
 const net = std.net;
 const expect = std.testing.expect;
+const ChildProcess = std.process.Child;
+const Allocator = std.mem.Allocator;
 
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
     // Connect to localhost:8080
     const address = try net.Address.parseIp4("127.0.0.1", 8080);
 
@@ -24,8 +29,41 @@ pub fn main() !void {
     var buffer: [1024]u8 = undefined;
     const bytes_read = try stream.read(&buffer);
 
-    // Print response
-    try stdout.print("Server response: {s}\n", .{buffer[0..bytes_read]});
+    // Pretty print XML response
+    const xml_response = buffer[0..bytes_read];
+
+    var process = ChildProcess.init(&.{ "xmllint", "--format", "-" }, gpa.allocator());
+    process.stdin_behavior = .Pipe;
+    process.stdout_behavior = .Pipe;
+
+    try process.spawn();
+
+    if (process.stdin) |stdin| {
+        try stdin.writeAll(xml_response);
+        stdin.close();
+        process.stdin = null;
+    }
+
+    const formatted_xml = try process.stdout.?.reader().readAllAlloc(gpa.allocator(), 1024 * 1024);
+    defer gpa.allocator().free(formatted_xml);
+
+    const term_result = try process.wait();
+    if (term_result.Exited != 0) {
+        return error.XmlLintFailed;
+    }
+
+    try stdout.print("\n{s}\n", .{formatted_xml});
+}
+
+/// Print debug message with source location information
+pub fn debugPrint(src: std.builtin.SourceLocation, comptime fmt: []const u8, args: anytype) void {
+    std.debug.print("[{s}:{d}] " ++ fmt, .{ src.file, src.line } ++ args);
+}
+
+/// Print debug message with source location information and newline
+/// Example: utils.debugPrintln(@src(), "Freeing String: {s}", .{self.chars});
+pub fn debugPrintln(src: std.builtin.SourceLocation, comptime fmt: []const u8, args: anytype) void {
+    debugPrint(src, fmt ++ "\n", args);
 }
 
 test "string hashmap" {
