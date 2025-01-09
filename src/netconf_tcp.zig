@@ -21,6 +21,7 @@ pub const NetconfTCP = struct {
     sup_gids: []const u8,
     homedir: []const u8,
     groups: []const u8,
+    debug: bool,
     stream: net.Stream,
 
     pub fn init(
@@ -31,6 +32,7 @@ pub const NetconfTCP = struct {
         sup_gids: []const u8,
         homedir: []const u8,
         groups: []const u8,
+        debug: bool,
     ) NetconfTCP {
         return NetconfTCP{
             .allocator = allocator,
@@ -41,6 +43,7 @@ pub const NetconfTCP = struct {
             .sup_gids = sup_gids,
             .homedir = homedir,
             .groups = groups,
+            .debug = debug,
             .stream = undefined,
         };
     }
@@ -56,7 +59,9 @@ pub const NetconfTCP = struct {
             break :blk list.addrs[0];
         };
 
-        utils.debugPrintln(@src(), "Address: {any}", .{address});
+        if (self.debug)
+            utils.debugPrintln(@src(), "Address: {any}", .{address});
+
         // Connect to the first resolved address
         self.stream = try net.tcpConnectToAddress(address);
     }

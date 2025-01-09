@@ -32,9 +32,10 @@ const hello_1_1: []const u8 =
 
 const Proto = enum { tcp, ssh };
 
-pub fn main() !void {
+pub fn main() u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
+    var debug = false;
     var vsn_1_0 = false;
     var username: []const u8 = "admin";
     var password: []const u8 = "admin";
@@ -46,6 +47,7 @@ pub fn main() !void {
 
     const params = comptime clap.parseParamsComptime(
         \\-h, --help                 Display this help and exit.
+        \\-d, --debug                Enable debug output
         \\--netconf10                Use Netconf vsn 1.0 (default: 1.1)
         \\-u, --user  <STR>          Username (default: admin)
         \\-p, --password <STR>       Password (default: admin)
@@ -72,7 +74,7 @@ pub fn main() !void {
     }) catch |err| {
         // Report useful error and exit.
         diag.report(std.io.getStdErr().writer(), err) catch {};
-        return error.CommandLineParseError;
+        return 1;
     };
     defer res.deinit();
 
@@ -80,6 +82,7 @@ pub fn main() !void {
         std.debug.print("Usage: zig build run -- [options]\n", .{});
         std.debug.print("Options:\n", .{});
         std.debug.print("  -h, --help             Display this help and exit\n", .{});
+        std.debug.print("  -d, --debug            Enable debug output\n", .{});
         std.debug.print("  --netconf10            Use Netconf vsn 1.0 (default: 1.1)\n", .{});
         std.debug.print("  -u, --user <username>  Username to use (default: admin)\n", .{});
         std.debug.print("  --password <password>  Password to use (default: admin)\n", .{});
@@ -88,8 +91,11 @@ pub fn main() !void {
         std.debug.print("  --proto <proto>        Protocol to use (default: tcp)\n", .{});
         std.debug.print("  --groups <groups>      Comma separated list of groups (default: )\n", .{});
         std.debug.print("  --sup-gids <groups>    Comma separated list of supplementary groups (default: )\n", .{});
-        return;
+        return 0;
     }
+
+    if (res.args.debug != 0)
+        debug = true;
 
     if (res.args.netconf10 != 0)
         vsn_1_0 = true;
@@ -111,7 +117,6 @@ pub fn main() !void {
 
     const stdout = std.io.getStdOut().writer();
 
-
     // Get current user info
     const uid = getuid();
     const gid = getgid();
@@ -127,18 +132,28 @@ pub fn main() !void {
         sup_gids,
         homedir,
         groups,
+        debug,
     );
 
     // Connect to server
-    try tcp_conn.connect(host, port); // Use IP address instead of hostname
+    tcp_conn.connect(host, port) catch |err| {
+        std.debug.print("Connect failed: {any}\n", .{err});
+        return 1;
+    };
     defer tcp_conn.deinit();
 
     // Send NETCONF Hello
-    try tcp_conn.sendHello(if (vsn_1_0) hello_1_0 else hello_1_1);
+    tcp_conn.sendHello(if (vsn_1_0) hello_1_0 else hello_1_1) catch |err| {
+        std.debug.print("Send HELLO failed: {any}\n", .{err});
+        return 1;
+    };
 
     // Read response
     var buffer: [1024]u8 = undefined;
-    const bytes_read = try tcp_conn.readResponse(&buffer);
+    const bytes_read = tcp_conn.readResponse(&buffer) catch |err| {
+        std.debug.print("Read response failed: {any}\n", .{err});
+        return 1;
+    };
 
     // Pretty print XML response
     const xml_response = buffer[0..bytes_read];
@@ -147,22 +162,37 @@ pub fn main() !void {
     process.stdin_behavior = .Pipe;
     process.stdout_behavior = .Pipe;
 
-    try process.spawn();
+    process.spawn() catch |err| {
+        std.debug.print("Spawn process failed: {any}\n", .{err});
+        return 1;
+    };
 
     if (process.stdin) |stdin| {
-        try stdin.writeAll(xml_response);
+        stdin.writeAll(xml_response) catch |err| {
+            std.debug.print("Write to stdin failed: {any}\n", .{err});
+            return 1;
+        };
         stdin.close();
         process.stdin = null;
     }
 
-    const formatted_xml = try process.stdout.?.reader().readAllAlloc(gpa.allocator(), 1024 * 1024);
+    const formatted_xml = process.stdout.?.reader().readAllAlloc(gpa.allocator(), 1024 * 1024) catch |err| {
+        std.debug.print("Read from stdout failed: {any}\n", .{err});
+        return 1;
+    };
     defer gpa.allocator().free(formatted_xml);
 
-    const term_result = try process.wait();
-    if (term_result.Exited != 0) {
-        return error.XmlLintFailed;
-    }
+    _ = process.wait() catch |err| {
+        std.debug.print("Wait for process failed: {any}\n", .{err});
+        return 1;
+    };
 
-    try stdout.print("\n{s}\n", .{formatted_xml});
+    stdout.print("\n{s}\n", .{formatted_xml}) catch |err| {
+        std.debug.print("Print to stdout failed: {any}\n", .{err});
+        return 1;
+    };
+
+    return 0;
+
 }
 
