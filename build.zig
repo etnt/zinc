@@ -42,6 +42,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Link against libssh from Homebrew
+    //exe.addLibraryPath(.{ .path = "/opt/homebrew/lib" }); // M1 Mac path
+    //exe.addLibraryPath(.{ .path = "/usr/local/lib" }); // Intel Mac path
+    exe.linkSystemLibrary("libssh");
+    //exe.addIncludePath(.{ .path = "/opt/homebrew/include" }); // M1 Mac path
+    //exe.addIncludePath(.{ .path = "/usr/local/include" }); // Intel Mac path
+    exe.linkLibC();
+
     // Add clap as a module to the executable
     exe.root_module.addImport("clap", clap_dep.module("clap"));
 
@@ -79,6 +87,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        .test_runner = b.path("test_runner.zig"), 
     });
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
@@ -87,6 +96,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .test_runner = b.path("test_runner.zig"), 
     });
 
     // Add clap as a module to the test executable
@@ -94,10 +104,22 @@ pub fn build(b: *std.Build) void {
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
+    const utils_tests = b.addTest(.{
+        .root_source_file = b.path("src/utils_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .test_runner = b.path("test_runner.zig"), 
+    });
+
+    const run_utils_tests = b.addRunArtifact(utils_tests);
+
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
+    test_step.dependOn(&run_utils_tests.step);
 }
+
+

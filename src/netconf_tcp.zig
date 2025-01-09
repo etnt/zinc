@@ -14,8 +14,9 @@ const utils = @import("utils.zig");
 
 pub const NetconfTCP = struct {
     allocator: std.mem.Allocator,
+    version: utils.NetconfVersion,
     username: []const u8,
-    ip: []const u8,
+    host: []const u8,
     uid: u32,
     gid: u32,
     sup_gids: []const u8,
@@ -23,9 +24,20 @@ pub const NetconfTCP = struct {
     groups: []const u8,
     debug: bool,
     stream: net.Stream,
+    header: []u8,
+    frame: []const u8,
+    eom_found: bool = false,
+    buf_bytes: std.ArrayList(u8),
+
+    pub const Error = error{
+        EndOfStream,
+        FramingError,
+        InvalidChunkSize,
+    };
 
     pub fn init(
         allocator: std.mem.Allocator,
+        vsn_1_0: bool,  // kept for compatibility
         username: []const u8,
         uid: u32,
         gid: u32,
@@ -36,8 +48,9 @@ pub const NetconfTCP = struct {
     ) NetconfTCP {
         return NetconfTCP{
             .allocator = allocator,
+            .version = if (vsn_1_0) .v1_0 else .v1_1,
             .username = username,
-            .ip = "",
+            .host = "",
             .uid = uid,
             .gid = gid,
             .sup_gids = sup_gids,
@@ -45,6 +58,10 @@ pub const NetconfTCP = struct {
             .groups = groups,
             .debug = debug,
             .stream = undefined,
+            .header = "",
+            .frame = if (vsn_1_0) utils.end_frame_1_0 else utils.end_frame_1_1,
+            .eom_found = false,
+            .buf_bytes = std.ArrayList(u8).init(allocator),
         };
     }
 
@@ -62,31 +79,93 @@ pub const NetconfTCP = struct {
         if (self.debug)
             utils.debugPrintln(@src(), "Address: {any}", .{address});
 
+        const header = try std.fmt.allocPrint(self.allocator,
+                                              "[{s};{s};tcp;{d};{d};{s};{s};{s};]\n",
+                                              .{ self.username, host, self.uid, self.gid, self.sup_gids, self.homedir, self.groups });
+
+        self.header = header;
+        self.host = host;
+
         // Connect to the first resolved address
         self.stream = try net.tcpConnectToAddress(address);
     }
 
     pub fn deinit(self: *NetconfTCP) void {
-        self.allocator.free(self.ip);
+        self.allocator.free(self.header);
+        self.buf_bytes.deinit();
         // Note: other fields are not owned by this struct
         self.stream.close();
     }
 
     pub fn sendHello(self: *NetconfTCP, hello_msg: []const u8) !void {
-        // Format the TCP header
-        const header = try std.fmt.allocPrint(self.allocator, "[{s};{s};tcp;{d};{d};{s};{s};{s};]\n", .{ self.username, self.ip, self.uid, self.gid, self.sup_gids, self.homedir, self.groups });
-        defer self.allocator.free(header);
+        // FIXME ? check that stream is initilized: if (self.stream) ...
 
-        // Send header followed by hello message
-        try self.stream.writeAll(header);
+        if (self.debug)
+            utils.debugPrintln(@src(), "Sending hello message, header={s}", .{self.header});
+
+        // The type of framing to be used is determined by the version
+        // of the NETCONF protocol as indicated in the hello messages.
+        // So therefore we need to send the hello message first with the
+        // 1.0 framing, and then switch to 1.1 framing, if so negotiated.
+        try self.stream.writeAll(self.header);
         try self.stream.writeAll(hello_msg);
+        try self.stream.writeAll(utils.end_frame_1_0);
     }
 
     pub fn write(self: *NetconfTCP, buffer: []const u8) !void {
-        try self.stream.writeAll(buffer);
+        // FIXME ? check that stream is initilized: if (self.stream) ...
+        switch (self.version) {
+            .v1_0 => {
+            try self.stream.writeAll(buffer);
+            },
+            .v1_1 => {
+            const frame_1_1 = try std.fmt.allocPrint(self.allocator, "\n#{d}\n", .{ buffer.len });
+            defer self.allocator.free(frame_1_1);
+
+            try self.stream.writeAll(frame_1_1);
+            try self.stream.writeAll(buffer);
+            },
+        }
     }
 
-    pub fn readResponse(self: *NetconfTCP, buffer: []u8) !usize {
-        return try self.stream.read(buffer);
+    // Write End-Of-Frame
+    pub fn writeEOF(self: *NetconfTCP) !void {
+        switch (self.version) {
+            .v1_0 => {
+            try self.stream.writeAll(utils.end_frame_1_0);
+            },
+            .v1_1 => {
+            try self.stream.writeAll(utils.end_frame_1_1);
+            },
+        }
+    }
+
+    pub fn readResponse(self: *NetconfTCP) ![]u8 {
+        if (self.debug) {
+            utils.debugPrintln(@src(), "Reading response with version: {}", .{self.version});
+        }
+        switch (self.version) {
+            .v1_0 => {
+                if (self.debug) {
+                    utils.debugPrintln(@src(), "Using 1.0 framing", .{});
+                }
+                return self.recvBytesFraming1_0();
+            },
+            .v1_1 => {
+                if (self.debug) {
+                    utils.debugPrintln(@src(), "Using 1.1 framing", .{});
+                }
+                return self.recvChunkBytesFraming1_1();
+            },
+        }
+    }
+
+    // Note: Always used when expecting a HELLO response from the server.
+    pub fn recvBytesFraming1_0(self: *NetconfTCP) ![]u8 {
+        return utils.readUntilFrameMarker(self.allocator, self.stream, utils.end_frame_1_0);
+    }
+
+    pub fn recvChunkBytesFraming1_1(self: *NetconfTCP) ![]u8 {
+        return utils.readChunkedNetconf(self.allocator, self.stream);
     }
 };

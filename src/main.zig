@@ -3,29 +3,91 @@ const clap: type = @import("clap");
 const net = std.net;
 const utils = @import("utils.zig");
 const NetconfTCP = @import("netconf_tcp.zig").NetconfTCP;
+const NetconfSSH = @import("netconf_ssh.zig").NetconfSSH;
 const expect = std.testing.expect;
 
+const Connection = union(Proto) {
+    tcp: *NetconfTCP,
+    ssh: *NetconfSSH,
+
+    pub fn sendHello(self: Connection, hello_msg: []const u8) !void {
+        var result: anyerror!void = undefined;
+        switch (self) {
+            .tcp => |conn| result = conn.sendHello(hello_msg),
+            .ssh => |conn| result = conn.sendHello(hello_msg),
+        }
+        return result;
+    }
+
+    pub fn write(self: Connection, buffer: []const u8) !void {
+        var result: anyerror!void = undefined;
+        switch (self) {
+            .tcp => |conn| result = conn.write(buffer),
+            .ssh => |conn| result = conn.write(buffer),
+        }
+        return result;
+    }
+
+    pub fn writeEOF(self: Connection) !void {
+        var result: anyerror!void = undefined;
+        switch (self) {
+            .tcp => |conn| result = conn.writeEOF(),
+            .ssh => |conn| result = conn.writeEOF(),
+        }
+        return result;
+    }
+
+    pub fn readResponse(self: Connection) ![]u8 {
+        var result: anyerror![]u8 = undefined;
+        switch (self) {
+            .tcp => |conn| result = conn.readResponse(),
+            .ssh => |conn| result = conn.readResponse(),
+        }
+        return result;
+    }
+
+    pub fn recvBytesFraming1_0(self: Connection) ![]u8 {
+        var result: anyerror![]u8 = undefined;
+        switch (self) {
+            .tcp => |conn| result = conn.recvBytesFraming1_0(),
+            .ssh => |conn| result = conn.recvBytesFraming1_0(),
+        }
+        return result;
+    }
+
+    pub fn recvChunkBytesFraming1_1(self: Connection) ![]u8 {
+        var result: anyerror![]u8 = undefined;
+        switch (self) {
+            .tcp => |conn| result = conn.recvChunkBytesFraming1_1(),
+            .ssh => |conn| result = conn.recvChunkBytesFraming1_1(),
+        }
+        return result;
+    }
+
+    pub fn deinit(self: Connection) void {
+        switch (self) {
+            .tcp => |conn| conn.deinit(),
+            .ssh => |conn| conn.deinit(),
+        }
+    }
+
+    pub fn updateVersion(self: Connection, buffer: []const u8, force_1_0: bool) void {
+        const version: utils.NetconfVersion = if (force_1_0) 
+            .v1_0 
+        else if (std.mem.indexOf(u8, buffer, "urn:ietf:params:netconf:base:1.1") != null) 
+            .v1_1 
+        else 
+            .v1_0;
+
+        switch (self) {
+            .tcp => |conn| conn.version = version,
+            .ssh => |conn| conn.version = version,
+        }
+    }
+};
 
 extern fn getuid() callconv(.C) u32;
 extern fn getgid() callconv(.C) u32;
-
-const hello_1_0: []const u8 =
-    \\<?xml version="1.0" encoding="UTF-8"?>
-    \\<hello xmlns="urn:ietf:params:netconf:base:1.0">
-    \\  <capabilities>
-    \\    <capability>urn:ietf:params:netconf:base:1.0</capability>
-    \\  </capabilities>
-    \\</hello>
-;
-
-const hello_1_1: []const u8 =
-    \\<?xml version="1.1" encoding="UTF-8"?>
-    \\<hello xmlns="urn:ietf:params:netconf:base:1.1">
-    \\  <capabilities>
-    \\    <capability>urn:ietf:params:netconf:base:1.1</capability>
-    \\  </capabilities>
-    \\</hello>
-;
 
 const Proto = enum { tcp, ssh };
 
@@ -34,8 +96,9 @@ pub fn main() u8 {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
     var debug = false;
-    var vsn_1_0 = false;
+    var vsn_1_0 = false; // default is: 1.1
     var hello: bool = false;
+    var pretty: bool = false;
     var username: []const u8 = "admin";
     var password: []const u8 = "admin";
     var host: []const u8 = "localhost";
@@ -49,6 +112,7 @@ pub fn main() u8 {
         \\-d, --debug                Enable debug output
         \\--netconf10                Use Netconf vsn 1.0 (default: 1.1)
         \\--hello                    Only send a NETCONF Hello message
+        \\--pretty                   Pretty print the output
         \\-u, --user  <STR>          Username (default: admin)
         \\-p, --password <STR>       Password (default: admin)
         \\--proto <PROTO>            Protocol (default: tcp)
@@ -87,6 +151,7 @@ pub fn main() u8 {
         std.debug.print("  -d, --debug            Enable debug output\n", .{});
         std.debug.print("  --netconf10            Use Netconf vsn 1.0 (default: 1.1)\n", .{});
         std.debug.print("  --hello                Only send a NETCONF Hello message\n", .{});
+        std.debug.print("  --pretty               Pretty print the output\n", .{});
         std.debug.print("  -u, --user <username>  Username to use (default: admin)\n", .{});
         std.debug.print("  --password <password>  Password to use (default: admin)\n", .{});
         std.debug.print("  --host <host>          Host to connect to (default: localhost)\n", .{});
@@ -104,6 +169,8 @@ pub fn main() u8 {
         vsn_1_0 = true;
     if (res.args.hello != 0)
         hello = true;
+    if (res.args.pretty != 0)
+        pretty = true;
     if (res.args.user != null)
         username = res.args.user.?;
     if (res.args.password != null)
@@ -127,44 +194,106 @@ pub fn main() u8 {
     const homedir = std.process.getEnvVarOwned(allocator, "HOME") catch "/tmp";
     defer allocator.free(homedir);
 
-    // Initialize TCP connection handler
-    var tcp_conn = NetconfTCP.init(
-        allocator,
-        username,
-        uid,
-        gid,
-        sup_gids,
-        homedir,
-        groups,
-        debug,
-    );
+    // Initialize connection handler based on protocol
+    var conn: Connection = switch (proto) {
+        .tcp => blk: {
+            const tcp_conn = allocator.create(NetconfTCP) catch |err| {
+                std.debug.print("Allocate NetconfTCP failed: {any}\n", .{err});
+                return 1;
+            };
+            tcp_conn.* = NetconfTCP.init(
+                allocator,
+                vsn_1_0,
+                username,
+                uid,
+                gid,
+                sup_gids,
+                homedir,
+                groups,
+                debug,
+            );
+            break :blk .{ .tcp = tcp_conn };
+        },
+        .ssh => blk: {
+            const ssh_conn = allocator.create(NetconfSSH) catch |err| {
+                std.debug.print("Allocate NetconfSSH failed: {any}\n", .{err});
+                return 1;
+            };
+            ssh_conn.* = NetconfSSH.init(
+                allocator,
+                vsn_1_0,
+                username,
+                password,
+                debug,
+            );
+            break :blk .{ .ssh = ssh_conn };
+        },
+    };
+    defer switch (conn) {
+        .tcp => |c| allocator.destroy(c),
+        .ssh => |c| allocator.destroy(c),
+    };
+
+    if (debug)
+        utils.debugPrintln(@src(), "Connection initialized.", .{});
 
     // Connect to server
-    tcp_conn.connect(host, port) catch |err| {
-        std.debug.print("Connect failed: {any}\n", .{err});
-        return 1;
-    };
-    defer tcp_conn.deinit();
+    switch (conn) {
+        .tcp => |c| c.connect(host, port) catch |err| {
+            std.debug.print("Connect TCP failed: {any}\n", .{err});
+            return 1;
+        },
+        .ssh => |c| c.connect(host, port) catch |err| {
+            std.debug.print("Connect SSH failed: {any}\n", .{err});
+            return 1;
+        },
+    }
+    defer conn.deinit();
 
     // Send NETCONF Hello
-    tcp_conn.sendHello(if (vsn_1_0) hello_1_0 else hello_1_1) catch |err| {
+    conn.sendHello(if (vsn_1_0) utils.hello_1_0 else utils.hello_1_1) catch |err| {
         std.debug.print("Send HELLO failed: {any}\n", .{err});
         return 1;
     };
 
-    // Read response
-    var buffer: [1024]u8 = undefined;
-    const bytes_read = tcp_conn.readResponse(&buffer) catch |err| {
+    if (debug)
+        utils.debugPrintln(@src(), "Sending hello message OK!", .{});
+
+    // Read HELLO response
+    const buffer = conn.recvBytesFraming1_0() catch |err| {
         std.debug.print("Read response failed: {any}\n", .{err});
         return 1;
     };
+    defer allocator.free(buffer);
+
+    // Update connection version based on HELLO response
+    conn.updateVersion(buffer, vsn_1_0);
+
+    if (debug) {
+        const version = switch (conn) {
+            .tcp => |c| c.version,
+            .ssh => |c| c.version,
+        };
+        utils.debugPrintln(@src(), "Reading HELLO response, read {d} bytes, vsn={s}", .{
+            buffer.len,
+            switch (version) {
+                .v1_0 => "1.0",
+                .v1_1 => "1.1",
+            },
+        });
+    }
 
     if (hello) {
-        if (!utils.prettyPrint(allocator, buffer[0..bytes_read])) {
-            std.debug.print("Failed to pretty print XML\n", .{});
-            return 1;
+        if (pretty) {
+            if (!utils.prettyPrint(allocator, buffer)) {
+                std.debug.print("Failed to pretty print XML\n", .{});
+                return 1;
+            }
+            return 0;
+        } else {
+            std.debug.print("{s}\n", .{buffer});
+            return 0;
         }
-        return 0;
     }
 
     // Set up the reader based on whether a file was provided
@@ -181,10 +310,13 @@ pub fn main() u8 {
         reader = file.?.reader();
     } else {
         // Read from stdin
+        if (debug)
+            utils.debugPrintln(@src(), "Reading from stdin", .{});
         reader = std.io.getStdIn().reader();
     }
 
     var inbuf: [1024*1024]u8 = undefined;
+    var inmsg_len: usize = 0;
     while (true) {
         const maybe_line = reader.readUntilDelimiterOrEof(&inbuf, '\n') catch |err| {
             std.debug.print("Read failed: {any}\n", .{err});
@@ -192,14 +324,45 @@ pub fn main() u8 {
         };
 
         if (maybe_line) |line| {
-            tcp_conn.write(line) catch |err| {
-                std.debug.print("Write to TCP failed: {any}\n", .{err});
+            inmsg_len += line.len;
+            conn.write(line) catch |err| {
+                std.debug.print("Write failed: {any}\n", .{err});
                 break;
             };
         } else {
             // EOF reached
+            conn.writeEOF() catch |err| {
+                std.debug.print("Write EOF failed: {any}\n", .{err});
+            };
             break;
         }
+    }
+
+    if (debug)
+        utils.debugPrintln(@src(), "Wrote {d} bytes to stream", .{inmsg_len});
+
+    // Read response using the appropriate framing based on negotiated version
+    const buffer2 = conn.readResponse() catch |err| {
+        std.debug.print("Read response 2 failed: {any}\n", .{err});
+        return 1;
+    };
+    defer allocator.free(buffer2);
+
+    if (debug)
+        utils.debugPrintln(@src(), "Reading response, read {d} bytes", .{buffer2.len});
+
+    if (pretty) {
+        if (!utils.prettyPrint(allocator, buffer2)) {
+            std.debug.print("Failed to pretty print XML\n", .{});
+            return 1;
+        }
+        return 0;
+    } else {
+        std.io.getStdOut().writer().print("{s}\n", .{buffer2}) catch {
+            std.debug.print("Failed to print result to stdout\n", .{});
+            return 1;
+        };
+        return 0;
     }
 
     return 0;

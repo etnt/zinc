@@ -13,6 +13,7 @@ zig build run -- [options] [file]
 -h, --help                 Display help and exit
 --netconf10                Use NETCONF 1.0 (default: 1.1)
 --hello                    Only send a NETCONF Hello message
+--pretty                   Pretty print the output
 -u, --user <username>      Username (default: admin)
 -p, --password <password>  Password (default: admin)
 --proto [tcp | ssh]        Protocol (default: tcp)
@@ -29,18 +30,28 @@ If no file is specified, the client reads NETCONF commands from stdin.
 Build and connect to a local NETCONF server and send NETCONF messages,
 either from a file or from stdin.
 ```bash
-zig build run -- nc-message.xml
+zig build run -- nc-msg.xml
 ```
 
-or if you have already built the project (via stdin this time):
+When you have already built the project, you'll find a binary in the `zig-out/bin` directory.
 
+Pipe commands from another program:
 ```bash
-cat nc-message.xml | ./zig-out/bin/zinc
-```
+❯ cat nc-msg.xml
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"  message-id="1">
+  <get-config>
+    <source>
+      <running/>
+    </source>
+  </get-config>
+</rpc>
 
-Pipe commands from another program, this time using a custom port:
-```bash
-echo "<get-config><source><running/></source></get-config>" | zig build run -- --port 2222
+❯ cat nc-msg.xml | ./zig-out/bin/zinc --host 10.147.40.55 --proto tcp --port 2023  --pretty
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
+  <data>
+  ...
 ```
 
 **Note:** A NETCONF Hello message exchange is automatically made before
@@ -50,12 +61,12 @@ To only send a NETCONF Hello message, use the `--hello` flag.
 
 Connect to a specific host with custom credentials:
 ```bash
-zig build run -- --host 192.168.1.100 --port 830 -u operator -p secret
+zig build run -- --host 192.168.1.100 --port 830 -u operator -p secret --hello
 ```
 
 Use NETCONF 1.0 with specific groups:
 ```bash
-zig build run -- --netconf10 --groups "netconf,admin" --sup-gids "1000,1001"
+zig build run -- --netconf10 --groups "netconf,admin" --sup-gids "1000,1001" --hello
 ```
 
 ## TCP Transport Details
