@@ -28,15 +28,6 @@ const Connection = union(Proto) {
         return result;
     }
 
-    pub fn writeEOF(self: Connection) !void {
-        var result: anyerror!void = undefined;
-        switch (self) {
-            .tcp => |conn| result = conn.writeEOF(),
-            .ssh => |conn| result = conn.writeEOF(),
-        }
-        return result;
-    }
-
     pub fn readResponse(self: Connection) ![]u8 {
         var result: anyerror![]u8 = undefined;
         switch (self) {
@@ -315,31 +306,42 @@ pub fn main() u8 {
         reader = std.io.getStdIn().reader();
     }
 
-    var inbuf: [1024*1024]u8 = undefined;
-    var inmsg_len: usize = 0;
+    var chunk_buffer: [1024]u8 = undefined;
+
+    // Read the entire message into a buffer first
+    var message = std.ArrayList(u8).init(allocator);
+    defer message.deinit();
+
     while (true) {
-        const maybe_line = reader.readUntilDelimiterOrEof(&inbuf, '\n') catch |err| {
+        const bytes_read = reader.read(&chunk_buffer) catch |err| {
             std.debug.print("Read failed: {any}\n", .{err});
             return 1;
         };
 
-        if (maybe_line) |line| {
-            inmsg_len += line.len;
-            conn.write(line) catch |err| {
-                std.debug.print("Write failed: {any}\n", .{err});
-                break;
-            };
-        } else {
-            // EOF reached
-            conn.writeEOF() catch |err| {
-                std.debug.print("Write EOF failed: {any}\n", .{err});
-            };
+        if (debug)
+            utils.debugPrintln(@src(), "Read {d} bytes", .{bytes_read});
+
+        if (bytes_read == 0) { // EOF
             break;
         }
+
+        message.appendSlice(chunk_buffer[0..bytes_read]) catch |err| {
+            std.debug.print("Failed to append to message buffer: {any}\n", .{err});
+            return 1;
+        };
     }
 
     if (debug)
-        utils.debugPrintln(@src(), "Wrote {d} bytes to stream", .{inmsg_len});
+        utils.debugPrintln(@src(), "Going to write: {s}", .{message.items});
+
+    // Write the complete message including EOF marker
+    conn.write(message.items) catch |err| {
+        std.debug.print("Write failed: {any}\n", .{err});
+        return 1;
+    };
+
+    if (debug)
+        utils.debugPrintln(@src(), "Wrote {d} bytes including EOF", .{message.items.len});
 
     // Read response using the appropriate framing based on negotiated version
     const buffer2 = conn.readResponse() catch |err| {
@@ -349,7 +351,7 @@ pub fn main() u8 {
     defer allocator.free(buffer2);
 
     if (debug)
-        utils.debugPrintln(@src(), "Reading response, read {d} bytes", .{buffer2.len});
+        utils.debugPrintln(@src(), "Got response, read {d} bytes", .{buffer2.len});
 
     if (pretty) {
         if (!utils.prettyPrint(allocator, buffer2)) {

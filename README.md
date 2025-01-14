@@ -1,5 +1,5 @@
 # zinc - A NETCONF Client in Zig
-> A NETCONF client running over TCP (and SSH...)
+> A NETCONF client running over TCP and SSH
 
 ## Usage
 
@@ -21,6 +21,7 @@ zig build run -- [options] [file]
 --port <port-number>       Port to connect to (default: 2022)
 --groups <groups>          Groups, comma separated
 --sup-gids <sup-gids>      Supplementary groups, comma separated
+--debug                    Enable debug output
 ```
 
 If no file is specified, the client reads NETCONF commands from stdin.

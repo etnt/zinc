@@ -23,7 +23,7 @@ pub const hello_1_0: []const u8 =
     \\  <capabilities>
     \\    <capability>urn:ietf:params:netconf:base:1.0</capability>
     \\  </capabilities>
-    \\</hello>
+    \\</hello>]]>]]>
 ;
 
 pub const hello_1_1: []const u8 =
@@ -33,7 +33,7 @@ pub const hello_1_1: []const u8 =
     \\    <capability>urn:ietf:params:netconf:base:1.0</capability>
     \\    <capability>urn:ietf:params:netconf:base:1.1</capability>
     \\  </capabilities>
-    \\</hello>
+    \\</hello>]]>]]>
 ;
 
 const start_marker = "\n#"[0..];
@@ -50,6 +50,7 @@ pub const ChunkedError = error{
     InvalidCharacter,
     Overflow,
     Timeout,
+    FrameMarkerNotFound,
 };
 
 pub const State = enum {
@@ -59,7 +60,7 @@ pub const State = enum {
     IncompleteMessage,
 };
 
-pub fn readChunkedNetconf(allocator: std.mem.Allocator, stream: std.net.Stream) ChunkedError![]u8 {
+pub fn readChunkedNetconf(allocator: std.mem.Allocator, stream: anytype) ChunkedError![]u8 {
     var buffer = std.ArrayList(u8).init(allocator);
     defer buffer.deinit();
 
@@ -325,9 +326,8 @@ fn findFrameMarker(buffer: []const u8, marker: []const u8) ?usize {
 }
 
 pub fn readUntilFrameMarker(allocator: std.mem.Allocator, stream: anytype, marker: []const u8) ![]u8 {
-    const chunk_size = 1024;     // Adjust chunk size as needed
+    const chunk_size = 1024 * 4;     // Adjust chunk size as needed
     var temp_buf: [chunk_size]u8 = undefined;
-
     var result = std.ArrayList(u8).init(allocator);
 
     while (true) {
@@ -346,7 +346,7 @@ pub fn readUntilFrameMarker(allocator: std.mem.Allocator, stream: anytype, marke
         }
     }
 
-    return result.toOwnedSlice();
+    return error.FrameMarkerNotFound;
 }
 
 /// Pretty print XML

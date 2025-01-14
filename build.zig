@@ -113,6 +113,17 @@ pub fn build(b: *std.Build) void {
 
     const run_utils_tests = b.addRunArtifact(utils_tests);
 
+    // Build C client for NETCONF
+    const netconf_ssh = b.addExecutable(.{
+        .name = "netconf_ssh",
+        .target = target,
+        .optimize = optimize,
+      });
+    netconf_ssh.addCSourceFile(.{ .file = b.path("src/netconf_ssh.c"), .flags = &.{} });
+    netconf_ssh.linkSystemLibrary("libssh");
+    netconf_ssh.linkLibC();
+    b.installArtifact(netconf_ssh);
+
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
