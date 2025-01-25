@@ -14,7 +14,7 @@ zig build run -- [options] [file]
 --netconf10                Use NETCONF 1.0 (default: 1.1)
 --hello                    Only send a NETCONF Hello message
 --get-config               Send a NETCONF get-config message
---filter <STR>             Filter to be used in NETCONF message (e.g get-config)
+--filter <string>          Filter to be used in NETCONF message (e.g get-config)
 --pretty                   Pretty print the output
 -u, --user <username>      Username (default: admin)
 -p, --password <password>  Password (default: admin)
