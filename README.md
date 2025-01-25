@@ -36,7 +36,50 @@ zig build run -- nc-msg.xml
 
 When you have already built the project, you'll find a binary in the `zig-out/bin` directory.
 
-Pipe commands from another program:
+### Send a `get-config` request to a NETCONF server:
+
+```bash
+❯ ./zig-out/bin/zinc  --user admin --password admin --host 10.147.40.55 --port 2022 \
+                      --proto ssh --pretty --get-config \
+                      --filter '<jukebox xmlns="http://example.com/ns/example-jukebox"/>'
+
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
+  <data>
+    <jukebox xmlns="http://example.com/ns/example-jukebox">
+      <library>
+        <artist>
+          <name>Foo Fighters</name>
+          <album>
+            <name>One by One</name>
+            <genre>alternative</genre>
+            <year>2012</year>
+            <admin>
+              <label>Roswell/RCA/BMG</label>
+              <catalogue-number>7432197348-2</catalogue-number>
+            </admin>
+          </album>
+        </artist>
+        <artist>
+          <name>Nick Cave and the Bad Seeds</name>
+          <album>
+            <name>Tender Prey</name>
+            <genre>alternative</genre>
+            <year>1988</year>
+          </album>
+          <album>
+            <name>The Good Son</name>
+            <year>1990</year>
+          </album>
+        </artist>
+      </library>
+    </jukebox>
+  </data>
+</rpc-reply>
+```
+
+### Pipe commands from another program:
+
 ```bash
 ❯ cat nc-msg.xml
 <?xml version="1.0" encoding="UTF-8"?>

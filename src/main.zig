@@ -89,6 +89,8 @@ pub fn main() u8 {
     var debug = false;
     var vsn_1_0 = false; // default is: 1.1
     var hello: bool = false;
+    var get_config: bool = false;
+    var filter: []const u8 = "";
     var pretty: bool = false;
     var username: []const u8 = "admin";
     var password: []const u8 = "admin";
@@ -103,6 +105,8 @@ pub fn main() u8 {
         \\-d, --debug                Enable debug output
         \\--netconf10                Use Netconf vsn 1.0 (default: 1.1)
         \\--hello                    Only send a NETCONF Hello message
+        \\--get-config               Send a NETCONF get-config message
+        \\--filter <STR>             Filter to be used in NETCONF message (e.g get-config)
         \\--pretty                   Pretty print the output
         \\-u, --user  <STR>          Username (default: admin)
         \\-p, --password <STR>       Password (default: admin)
@@ -142,6 +146,8 @@ pub fn main() u8 {
         std.debug.print("  -d, --debug            Enable debug output\n", .{});
         std.debug.print("  --netconf10            Use Netconf vsn 1.0 (default: 1.1)\n", .{});
         std.debug.print("  --hello                Only send a NETCONF Hello message\n", .{});
+        std.debug.print("  --get-config           Send a NETCONF get-config message\n", .{});
+        std.debug.print("  --filter               Filter to be used in NETCONF message (e.g get-config)\n", .{});
         std.debug.print("  --pretty               Pretty print the output\n", .{});
         std.debug.print("  -u, --user <username>  Username to use (default: admin)\n", .{});
         std.debug.print("  --password <password>  Password to use (default: admin)\n", .{});
@@ -160,6 +166,10 @@ pub fn main() u8 {
         vsn_1_0 = true;
     if (res.args.hello != 0)
         hello = true;
+    if (res.args.@"get-config" != 0)
+        get_config = true;
+    if (res.args.filter != null)
+        filter = res.args.filter.?; 
     if (res.args.pretty != 0)
         pretty = true;
     if (res.args.user != null)
@@ -287,61 +297,90 @@ pub fn main() u8 {
         }
     }
 
-    // Set up the reader based on whether a file was provided
-    var file: ?std.fs.File = null;
-    defer if (file) |f| f.close();
-
-    var reader: std.fs.File.Reader = undefined;
-    if (res.positionals.len > 0) {
-        // Read from file
-        file = std.fs.cwd().openFile(res.positionals[0], .{}) catch |err| {
-            std.debug.print("Failed to open file '{s}': {any}\n", .{ res.positionals[0], err });
-            return 1;
-        };
-        reader = file.?.reader();
+    if (get_config) {
+        if (std.mem.eql(u8, filter, "")) {
+            // Send a get-config message without a filter
+            conn.write(utils.get_config) catch |err| {
+                std.debug.print("Write failed: {any}\n", .{err});
+                return 1;
+            };
+        } else {
+            // Send a get-config message with a user provided filter
+            const get_config_msg = utils.getConfig(allocator, filter) catch |err| {
+                std.debug.print("Failed to allocate get-config message: {any}\n", .{err});
+                return 1;
+            };
+            defer allocator.free(get_config_msg);
+            conn.write(get_config_msg) catch |err| {
+                std.debug.print("Write failed: {any}\n", .{err});
+                return 1;
+            };
+        }
     } else {
-        // Read from stdin
-        if (debug)
-            utils.debugPrintln(@src(), "Reading from stdin", .{});
-        reader = std.io.getStdIn().reader();
-    }
+        // --------------------------------------------------------------------------------
+        // R E A D   F R O M   F I L E  O R   S T D I N
+        // --------------------------------------------------------------------------------
 
-    var chunk_buffer: [1024]u8 = undefined;
+        // Set up the reader based on whether a file was provided
+        var file: ?std.fs.File = null;
+        defer if (file) |f| f.close();
 
-    // Read the entire message into a buffer first
-    var message = std.ArrayList(u8).init(allocator);
-    defer message.deinit();
-
-    while (true) {
-        const bytes_read = reader.read(&chunk_buffer) catch |err| {
-            std.debug.print("Read failed: {any}\n", .{err});
-            return 1;
-        };
-
-        if (debug)
-            utils.debugPrintln(@src(), "Read {d} bytes", .{bytes_read});
-
-        if (bytes_read == 0) { // EOF
-            break;
+        var reader: std.fs.File.Reader = undefined;
+        if (res.positionals.len > 0) {
+            // Read from file
+            file = std.fs.cwd().openFile(res.positionals[0], .{}) catch |err| {
+                std.debug.print("Failed to open file '{s}': {any}\n", .{ res.positionals[0], err });
+                return 1;
+            };
+            reader = file.?.reader();
+        } else {
+            // Read from stdin
+            if (debug)
+                utils.debugPrintln(@src(), "Reading from stdin", .{});
+            reader = std.io.getStdIn().reader();
         }
 
-        message.appendSlice(chunk_buffer[0..bytes_read]) catch |err| {
-            std.debug.print("Failed to append to message buffer: {any}\n", .{err});
+        var chunk_buffer: [1024]u8 = undefined;
+
+        // Read the entire message into a buffer first
+        var message = std.ArrayList(u8).init(allocator);
+        defer message.deinit();
+
+        while (true) {
+            const bytes_read = reader.read(&chunk_buffer) catch |err| {
+                std.debug.print("Read failed: {any}\n", .{err});
+                return 1;
+            };
+
+            if (debug)
+                utils.debugPrintln(@src(), "Read {d} bytes", .{bytes_read});
+
+            if (bytes_read == 0) { // EOF
+                break;
+            }
+
+            message.appendSlice(chunk_buffer[0..bytes_read]) catch |err| {
+                std.debug.print("Failed to append to message buffer: {any}\n", .{err});
+                return 1;
+            };
+        }
+
+        if (debug)
+            utils.debugPrintln(@src(), "Going to write: {s}", .{message.items});
+
+        // Write the complete message including EOF marker
+        conn.write(message.items) catch |err| {
+            std.debug.print("Write failed: {any}\n", .{err});
             return 1;
         };
+
+        if (debug)
+            utils.debugPrintln(@src(), "Wrote {d} bytes including EOF", .{message.items.len});
     }
 
-    if (debug)
-        utils.debugPrintln(@src(), "Going to write: {s}", .{message.items});
-
-    // Write the complete message including EOF marker
-    conn.write(message.items) catch |err| {
-        std.debug.print("Write failed: {any}\n", .{err});
-        return 1;
-    };
-
-    if (debug)
-        utils.debugPrintln(@src(), "Wrote {d} bytes including EOF", .{message.items.len});
+    // --------------------------------------------------------------------------------
+    // R E A D   T H E   R E S P O N S E
+    // --------------------------------------------------------------------------------
 
     // Read response using the appropriate framing based on negotiated version
     const buffer2 = conn.readResponse() catch |err| {

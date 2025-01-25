@@ -2,8 +2,8 @@ const std = @import("std");
 const ChildProcess = std.process.Child;
 
 pub const NetconfVersion = enum {
-    v1_0,  // Uses EOM framing
-    v1_1,  // Uses chunked framing
+    v1_0, // Uses EOM framing
+    v1_1, // Uses chunked framing
 };
 
 // See: https://datatracker.ietf.org/doc/html/rfc6242#section-4.1
@@ -35,6 +35,39 @@ pub const hello_1_1: []const u8 =
     \\  </capabilities>
     \\</hello>]]>]]>
 ;
+
+pub const get_config: [:0]const u8 =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"  message-id="1">
+    \\  <get-config>
+    \\    <source>
+    \\      <running/>
+    \\    </source>
+    \\  </get-config>
+    \\</rpc>
+;
+
+pub const close_sessions: [:0]const u8 =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"  message-id="2">
+    \\  <close-session/>
+    \\</rpc>
+;
+
+// Construct a get-config message with a specific filter
+pub fn getConfig(allocator: std.mem.Allocator, filter: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(allocator,
+        \\<?xml version="1.0" encoding="UTF-8"?>
+        \\<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"  message-id="1">
+        \\  <get-config>
+        \\    <source>
+        \\      <running/>
+        \\    </source>
+        \\    <filter>{s}</filter>
+        \\  </get-config>
+        \\</rpc>
+    , .{filter});
+}
 
 const start_marker = "\n#"[0..];
 const end_marker = "\n##\n"[0..];
@@ -72,7 +105,6 @@ pub fn readChunkedNetconf(allocator: std.mem.Allocator, stream: anytype) Chunked
 
     // Read in chunks until we have a complete message
     while (read_attempts < max_attempts) : (read_attempts += 1) {
-
         if (total_bytes >= max_total_bytes) {
             debugPrintln(@src(), "Message exceeds maximum size of {d} bytes", .{max_total_bytes});
             return ChunkedError.StreamTooLong;
@@ -188,7 +220,7 @@ pub fn parseChunkedNetconf(allocator: std.mem.Allocator, input: []const u8) Chun
                     const chunk_start = i;
                     const chunk_end = i + chunk_size;
                     if (chunk_end > buffer.len) {
-                        debugPrintln(@src(), "Chunk extends beyond buffer (start: {d}, end: {d}, len: {d})", .{chunk_start, chunk_end, buffer.len});
+                        debugPrintln(@src(), "Chunk extends beyond buffer (start: {d}, end: {d}, len: {d})", .{ chunk_start, chunk_end, buffer.len });
                         return ChunkedError.IncompleteMessage;
                     }
                     const chunk_data = allocator.dupe(u8, buffer[chunk_start..chunk_end]) catch return ChunkedError.OutOfMemory;
@@ -248,7 +280,7 @@ fn checkLengthMarker(buffer: []const u8, index: usize) bool {
         return false;
     }
 
-    if (digit_count > 10) {  // Reasonable limit for chunk size digits
+    if (digit_count > 10) { // Reasonable limit for chunk size digits
         return false;
     }
 
@@ -313,10 +345,10 @@ fn checkEndMarker(buffer: []const u8, index: usize) bool {
     }
 
     // Check for exact sequence
-    const is_end_marker = buffer[index] == '\n' and 
-                         buffer[index + 1] == '#' and 
-                         buffer[index + 2] == '#' and 
-                         buffer[index + 3] == '\n';
+    const is_end_marker = buffer[index] == '\n' and
+        buffer[index + 1] == '#' and
+        buffer[index + 2] == '#' and
+        buffer[index + 3] == '\n';
 
     return is_end_marker;
 }
@@ -326,7 +358,7 @@ fn findFrameMarker(buffer: []const u8, marker: []const u8) ?usize {
 }
 
 pub fn readUntilFrameMarker(allocator: std.mem.Allocator, stream: anytype, marker: []const u8) ![]u8 {
-    const chunk_size = 1024 * 4;     // Adjust chunk size as needed
+    const chunk_size = 1024 * 4; // Adjust chunk size as needed
     var temp_buf: [chunk_size]u8 = undefined;
     var result = std.ArrayList(u8).init(allocator);
 
