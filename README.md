@@ -119,7 +119,7 @@ When you have already built the project, you'll find a binary in the `zig-out/bi
 
 
 ❯ ./zig-out/bin/zinc  --netconf10 --user admin --password admin --host 10.147.40.55 --port 2022 \
-                      --proto ssh --pretty --netconf10 ./data/edit-rpc.xml 
+                      --proto ssh --pretty ./data/edit-rpc.xml 
 
 <?xml version="1.0" encoding="UTF-8"?>
 <rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
