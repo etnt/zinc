@@ -80,6 +80,75 @@ When you have already built the project, you'll find a binary in the `zig-out/bi
 </rpc-reply>
 ```
 
+### Send an `edit-config` request to a NETCONF server:
+
+```bash
+❯ cat data/edit-rpc.xml
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
+  <edit-config>
+    <target>
+      <running/>
+    </target>
+    <config>
+      <jukebox xmlns="http://example.com/ns/example-jukebox">
+        <library>
+          <artist xmlns="http://example.com/ns/example-jukebox">
+            <name>Nick Cave and the Bad Seeds</name>
+	          <album>
+	            <name>Wild God</name>
+	            <year>2024</year>
+	          </album>
+          </artist>
+        </library>
+      </jukebox>  
+    </config>
+  </edit-config>
+</rpc>
+]]>]]>
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="2">
+  <commit/>
+</rpc>
+]]>]]>
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="3">
+  <close-session/>
+</rpc>
+]]>]]>
+
+
+❯ ./zig-out/bin/zinc  --netconf10 --user admin --password admin --host 10.147.40.55 --port 2022 \
+                      --proto ssh --pretty --netconf10 ./data/edit-rpc.xml 
+
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
+  <ok/>
+</rpc-reply>
+
+
+❯ ./zig-out/bin/zinc  --netconf10 --user admin --password admin --host 10.147.40.55 --port 2022 \
+                      --proto ssh --pretty --get-config \
+  --filter '<jukebox xmlns="http://example.com/ns/example-jukebox"><library><artist><name>Nick Cave and the Bad Seeds</name><album><name>Wild God</name></album></artist></library></jukebox>' 
+
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
+  <data>
+    <jukebox xmlns="http://example.com/ns/example-jukebox">
+      <library>
+        <artist>
+          <name>Nick Cave and the Bad Seeds</name>
+          <album>
+            <name>Wild God</name>
+            <year>2024</year>
+          </album>
+        </artist>
+      </library>
+    </jukebox>
+  </data>
+</rpc-reply>
+```
+
 ### Pipe commands from another program:
 
 ```bash
